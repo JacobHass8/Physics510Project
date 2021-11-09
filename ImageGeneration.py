@@ -160,13 +160,38 @@ def SNR_Point(N, wave, NA, scale, SNR, camera_scale, B, xc=0, yc=0):
     background = np.random.poisson(B, binned_image.shape)
     return np.random.poisson(binned_image) + background
 
-def multiple_part_img(wave, NA, scale, camera_scale, SNR, size, centers):
+def multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, centers):
     '''
     Simulate multiple particles in an image.
 
     Parameters
     ----------
-    centers : list of
+    N : int
+        Size of the image
+
+    wave : float
+        Wavelength
+
+    NA : float
+        Numerical aperature
+
+    scale : float
+        Distance / pixel of the image
+
+    SNR : float
+        Signal to noise ratio calculated with reference to brightest pixel
+
+    camera_scale : float
+        Resolution of camera
+
+    B : float
+        Background noise value (should probably be < SNR if you
+        want a good image)
+
+    size : int
+        Size of ending image
+
+    centers : list of tuples
         x, y coordinates of simulated particles
 
     Examples
@@ -177,7 +202,7 @@ def multiple_part_img(wave, NA, scale, camera_scale, SNR, size, centers):
     >>> SNR = 10
     >>> camera_scale = 0.1
     >>> B = 1
-    >>> img = multiple_part_img(wave, NA, scale, camera_scale, SNR, 11, [(-4, -4), (4, 4)])
+    >>> img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, 11, [(-4, -4), (4, 4)])
     >>> plt.imshow(img, 'gray')
     '''
 
@@ -188,6 +213,129 @@ def multiple_part_img(wave, NA, scale, camera_scale, SNR, size, centers):
         zero += img
     binned_image = bin_image(zero, scale, camera_scale) + B * bin_scaling
     return np.random.poisson(binned_image)
+
+def generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, centers):
+    '''
+    Generate multiple images from given centers.
+
+    Parameters
+    ----------
+    N : int
+        Size of the image
+
+    wave : float
+        Wavelength
+
+    NA : float
+        Numerical aperature
+
+    scale : float
+        Distance / pixel of the image
+
+    SNR : float
+        Signal to noise ratio calculated with reference to brightest pixel
+
+    camera_scale : float
+        Resolution of camera
+
+    B : float
+        Background noise value (should probably be < SNR if you
+        want a good image)
+
+    size : int
+        Size of ending image
+
+    centers : list of list of tuples
+        x, y coordinates of simulated particles
+
+    Examples
+    --------
+    paths = diffusing_paths(centers=[(5,5), (-5, -5)], size=50, step_size=0.5)
+    wave = 0.5
+    NA = 0.9
+    scale = 0.01
+    SNR = 10
+    camera_scale = 0.1
+    B = 1
+    size = 30
+    imgs = generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, paths)
+    for j in range(imgs.shape[2]):
+        fig, ax = plt.subplots()
+        img = imgs[:, :, j]
+        x_centers, y_centers = find_multiple_centers(img)
+        ax.imshow(img, 'gray')
+        ax.scatter(x_centers, y_centers, c='r')
+        fig.savefig(f"./Data/Frame{j}.png", bbox_inches='tight')
+        plt.close(fig)
+
+    '''
+
+    # Create stack of images
+    img_shape = (size, size, len(centers))
+    img_stack = np.zeros(img_shape)
+
+    for i, center in enumerate(centers):
+        img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, center)
+        img_stack[:, :, i] = img
+    return img_stack
+
+def diffusing_path(center=(0,0), size=50, step_size=0.1):
+    '''
+    Generating a particle diffusing in 2D.
+
+    Parameters
+    ----------
+    center : tuple
+        Initial starting position of particle as (x, y)
+
+    size : int
+        Number of time steps to run through
+
+    step_size : float
+        Step size for each time
+
+    Returns
+    -------
+    path : 2D numpy array
+        First column is x-values and second column is y-values
+    '''
+
+    # High=2 b/c it is exclusive for whatever reason
+    steps_x = np.random.randint(low=-1, high=2, size=size) * step_size
+    steps_y = np.random.randint(low=-1, high=2, size=size) * step_size
+    position_x = np.cumsum(steps_x) + center[0]
+    position_y = np.cumsum(steps_y) + center[1]
+
+    return np.array((position_x, position_y)).T
+
+def diffusing_paths(centers=[(0, 0)], size=50, step_size=0.1):
+    '''
+    Generate multiple diffusing paths in 2D.
+
+    Parameters
+    ----------
+    centers : list of tuples
+        Starting position of each particle as (x, y) coordinates.
+
+    size : int
+        Number of time steps to run through
+
+    step_size : float
+        Step size for each time
+
+    Returns
+    -------
+    path : list of list of tuples
+        Particles coordinates at each time
+    '''
+
+    paths = [[] for _ in range(size)]
+    for cent in centers:
+        path = diffusing_path(cent, size, step_size)
+        path = list(map(tuple, path))
+        for j, pair in enumerate(path):
+            paths[j].append(pair)
+    return paths
 
 def find_bright_spots(img, size=2):
     """
@@ -223,7 +371,11 @@ def find_bright_spots(img, size=2):
     dilated = morph.dilation(img, morph.disk(size))
     bright_spots = dilated == img
     bright_spots[bright_spots * img < (med + std*2)] = 0
-    return np.nonzero(bright_spots)
+
+    # Okay, so this returns a weird data structure. First column is x-vals and
+    # second column is y-vals
+    bright_coordinates = np.array(np.nonzero(bright_spots)).T
+    return bright_coordinates
 
 def objfun(args, x, y, z):
     '''
@@ -272,7 +424,7 @@ def mle_center(img):
     x0, y0 = params[0], params[1]
     return (x0, y0)
 
-def find_multiple_centers(img, size=3, show_figs=False):
+def find_multiple_centers(img, size=3):
     """
     Find the particle center for an image with multiple particles.
 
@@ -284,30 +436,34 @@ def find_multiple_centers(img, size=3, show_figs=False):
     Returns
     -------
     x0, y0 : lists
-        Particle centers
+        Particle centers measured from the top left hand corner of the image
+
+    Examples
+    --------
+    >>> wave = 0.5
+    >>> NA = 0.9
+    >>> scale = 0.01
+    >>> SNR = 10
+    >>> camera_scale = 0.1
+    >>> B = 1
+    >>> img = multiple_part_img(wave, NA, scale, camera_scale, SNR, 20, [(1.5, 3.5), (-5, -5), (-5, 5), (5, -5)])
+    >>> x_centers, y_centers = find_multiple_centers(img)
+    >>> fig, ax = plt.subplots()
+    >>> ax.imshow(img)
+    >>> for x, y in zip(x_centers, y_centers):
+    >>>     ax.scatter(x, y, c='r')
+    >>> fig.savefig("Test.png")
     """
 
     bright_spots = find_bright_spots(img)
-    if show_figs:
-        fig, ax = plt.subplots()
-        ax.imshow(img)
 
+    x_centers = []
+    y_centers = []
     for x, y in bright_spots:
         region= img[x-size:x+size+1, y-size:y+size+1]
         x0, y0 = mle_center(region)
-        if show_figs:
-            ax.scatter(y, x)
-            plt.figure()
-            plt.imshow(region)
-            plt.scatter(x0, y0)
-
-
-if __name__ == '__main__':
-    wave = 0.5
-    NA = 0.9
-    scale = 0.01
-    SNR = 10
-    camera_scale = 0.1
-    B = 1
-    img = multiple_part_img(wave, NA, scale, camera_scale, SNR, 15, [(3,3), (-3, -3)])
-    find_multiple_centers(img, show_figs=True)
+        x0_offset = x0 - region.shape[0] // 2
+        y0_offset = y0 - region.shape[1] // 2
+        x_centers.append(x0_offset + y)
+        y_centers.append(y0_offset + x)
+    return x_centers, y_centers
