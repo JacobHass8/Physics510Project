@@ -11,6 +11,9 @@ from skimage.transform import downscale_local_mean
 from matplotlib import pyplot as plt
 from skimage import morphology as morph
 from scipy.optimize import minimize
+from scipy.optimize import linear_sum_assignment
+from numba import jit
+import pandas as pd
 
 def distance_matrix(size_x, size_y, xc=0, yc=0):
     '''
@@ -191,8 +194,9 @@ def multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, centers):
     size : int
         Size of ending image
 
-    centers : list of tuples
-        x, y coordinates of simulated particles
+    centers : 2D numpy array
+        x, y coordinates of simulated particles where first column
+        is x coordinates and second column is y coordinates
 
     Examples
     --------
@@ -202,7 +206,8 @@ def multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, centers):
     >>> SNR = 10
     >>> camera_scale = 0.1
     >>> B = 1
-    >>> img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, 11, [(-4, -4), (4, 4)])
+    >>> centers = np.array([[-4, -4], [4, 4]])
+    >>> img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, 11, centers)
     >>> plt.imshow(img, 'gray')
     '''
 
@@ -213,6 +218,85 @@ def multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, centers):
         zero += img
     binned_image = bin_image(zero, scale, camera_scale) + B * bin_scaling
     return np.random.poisson(binned_image)
+
+def diffusing_path(center=None, size=50, step_size=0.1):
+    '''
+    Generating a particle diffusing in 2D.
+
+    Parameters
+    ----------
+    center : list
+        Initial starting position of particle as (x, y)
+
+    size : int
+        Number of time steps to run through
+
+    step_size : float
+        Step size for each time
+
+    Returns
+    -------
+    path : 2D numpy array
+        First column is x-values, second column is y-values and
+        third column is time
+    '''
+
+    if center is None:
+        center = [0, 0]
+
+    # High=2 b/c it is exclusive for whatever reason
+    steps_x = np.random.randint(low=-1, high=2, size=size) * step_size
+    steps_y = np.random.randint(low=-1, high=2, size=size) * step_size
+    position_x = np.cumsum(steps_x) + center[0]
+    position_y = np.cumsum(steps_y) + center[1]
+    time = range(0, len(position_x))
+
+    return np.array((position_x, position_y, time)).T
+
+def diffusing_paths(centers=None, size=50, step_size=0.1):
+    '''
+    Generate multiple diffusing paths in 2D.
+
+    Parameters
+    ----------
+    centers : 2D numpy array
+        Starting position of each particle as (x, y) coordinates.
+        First column should be x-values and second column is y-values.
+
+    size : int
+        Number of time steps to run through
+
+    step_size : float
+        Step size for each time
+
+    Returns
+    -------
+    path : pandas Dataframe
+        Columns for x, y, time and particle id
+
+    Examples
+    --------
+    >>> centers = np.array([[5, 5], [-5, -5]])
+    >>> paths = diffusing_paths(centers)
+    >>> for part_id in np.unique(paths[:, 3]):
+    >>>     data = paths[paths[:, 3] == part_id]
+    >>>     plt.plot(data[:, 0], data[:, 1])
+    '''
+
+    if centers is None:
+        centers = np.array([[0, 0]])
+
+    # going to make a fourth column for the id
+    shape = (size * len(centers), 4)
+    paths = np.zeros(shape)
+
+    row_idx = 0
+    for part_id, cent in enumerate(centers):
+        path = diffusing_path(cent, size, step_size)
+        paths[row_idx : row_idx + len(path), :3] = path
+        paths[row_idx : row_idx + len(path), 3] = part_id
+        row_idx += len(path)
+    return pd.DataFrame(data=paths, columns=['x','y','time', 'id'])
 
 def generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, centers):
     '''
@@ -245,19 +329,27 @@ def generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, centers):
     size : int
         Size of ending image
 
-    centers : list of list of tuples
-        x, y coordinates of simulated particles
+    centers : pandas dataframe
+        Should have columns x, y and time
+
 
     Examples
     --------
-    paths = diffusing_paths(centers=[(5,5), (-5, -5)], size=50, step_size=0.5)
+    centers = np.array([[0, 0],
+                        [1, 1],
+                        [2, 2],
+                        [-1, -1],
+                        [-2, -2],
+                        [1, -1],
+                        [-1, 1]]) * 6
+    paths = diffusing_paths(centers=centers, size=100, step_size=0.5)
     wave = 0.5
     NA = 0.9
     scale = 0.01
     SNR = 10
     camera_scale = 0.1
     B = 1
-    size = 30
+    size = 50
     imgs = generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, paths)
     for j in range(imgs.shape[2]):
         fig, ax = plt.subplots()
@@ -267,75 +359,19 @@ def generate_imgs(wave, NA, scale, camera_scale, SNR, B, size, centers):
         ax.scatter(x_centers, y_centers, c='r')
         fig.savefig(f"./Data/Frame{j}.png", bbox_inches='tight')
         plt.close(fig)
-
     '''
 
-    # Create stack of images
-    img_shape = (size, size, len(centers))
-    img_stack = np.zeros(img_shape)
+    sorted_centers = centers.sort_values(by=['time'])
+    times = np.unique(sorted_centers['time'])
 
-    for i, center in enumerate(centers):
-        img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, center)
+    img_shape = (size, size, len(times))
+    img_stack = np.zeros(img_shape)
+    for i, t in enumerate(times):
+        current_centers = sorted_centers[sorted_centers['time'] == t]
+        xy_vals = current_centers[['x', 'y']].values
+        img = multiple_part_img(wave, NA, scale, camera_scale, SNR, B, size, xy_vals)
         img_stack[:, :, i] = img
     return img_stack
-
-def diffusing_path(center=(0,0), size=50, step_size=0.1):
-    '''
-    Generating a particle diffusing in 2D.
-
-    Parameters
-    ----------
-    center : tuple
-        Initial starting position of particle as (x, y)
-
-    size : int
-        Number of time steps to run through
-
-    step_size : float
-        Step size for each time
-
-    Returns
-    -------
-    path : 2D numpy array
-        First column is x-values and second column is y-values
-    '''
-
-    # High=2 b/c it is exclusive for whatever reason
-    steps_x = np.random.randint(low=-1, high=2, size=size) * step_size
-    steps_y = np.random.randint(low=-1, high=2, size=size) * step_size
-    position_x = np.cumsum(steps_x) + center[0]
-    position_y = np.cumsum(steps_y) + center[1]
-
-    return np.array((position_x, position_y)).T
-
-def diffusing_paths(centers=[(0, 0)], size=50, step_size=0.1):
-    '''
-    Generate multiple diffusing paths in 2D.
-
-    Parameters
-    ----------
-    centers : list of tuples
-        Starting position of each particle as (x, y) coordinates.
-
-    size : int
-        Number of time steps to run through
-
-    step_size : float
-        Step size for each time
-
-    Returns
-    -------
-    path : list of list of tuples
-        Particles coordinates at each time
-    '''
-
-    paths = [[] for _ in range(size)]
-    for cent in centers:
-        path = diffusing_path(cent, size, step_size)
-        path = list(map(tuple, path))
-        for j, pair in enumerate(path):
-            paths[j].append(pair)
-    return paths
 
 def find_bright_spots(img, size=2):
     """
@@ -467,3 +503,98 @@ def find_multiple_centers(img, size=3):
         x_centers.append(x0_offset + y)
         y_centers.append(y0_offset + x)
     return x_centers, y_centers
+
+@jit()
+def make_cost_matrix(initial_centers, final_centers):
+    '''
+    Make a cost matrix.
+
+    Parameters
+    ----------
+    initial_centers : 2D numpy array
+        First column is x-values and second column is y-values
+        (x, y)
+
+    final_centers : 2D numpy array
+        First column is x-values and second column is y-values
+        (x, y)
+
+    Returns
+    -------
+    cost_matrix : 2D numpy array
+        Matrix where cost_matrix[i, j] = msd(x_i, x_j) or
+        is the mean squared displacement between the i and j
+        particle.
+
+
+    Examples
+    --------
+    >>> centers = [[(5, 5), (-5, -5)], [(4.5, 4.5), (-5.5, -5.5)]]
+    >>> cost_matrix = make_cost_matrix(centers)
+    >>> indeces = linear_sum_assignment(cost_matrix)
+    '''
+
+    nParticles = len(initial_centers)
+
+    assert len(initial_centers) == len(final_centers), "Must have the same number of particles"
+
+    cost_matrix = np.zeros(shape=(nParticles, nParticles))
+    for i in range(len(initial_centers)):
+        for j in range(len(final_centers)):
+            x_initial, y_initial = initial_centers[i, :]
+            x_final, y_final = final_centers[j, :]
+            msd = (x_initial - x_final) ** 2 + (y_initial - y_final) ** 2
+            cost_matrix[i, j] = msd
+    return cost_matrix
+
+def assign_labels(paths):
+    '''
+    Assign labels to each of the centers based on the reported
+    cost matrix minimization.
+
+    Parameters
+    ----------
+    paths : pandas Dataframe
+        Should have columns x, y, and time
+
+    Returns
+    -------
+    paths : pandas Dataframe
+        Same dataframe with new "particle_id" column
+    '''
+
+    time_sorted_df = paths.sort_values(by=['time', 'id'])
+    times = np.unique(time_sorted_df['time'])
+    time_sorted_df['particle_id'] = range(len(time_sorted_df))
+
+    for j in range(1, len(times)):
+        current_time = time_sorted_df[time_sorted_df['time'] == times[j]]
+        prev_time = time_sorted_df[time_sorted_df['time'] == times[j-1]]
+
+        final_centers = current_time[['x', 'y']].values
+        initial_centers = prev_time[['x', 'y']].values
+        cost = make_cost_matrix(initial_centers, final_centers)
+        row_idx, col_idx = linear_sum_assignment(cost)
+
+        # note: row_idx will just be the range of the number of particles
+        # so row_idx corresponds to initial particle value
+        # and col_idx corresponds to final particle value
+
+        for row, col in zip(row_idx, col_idx):
+            prev_id = prev_time.iloc[row]['particle_id']
+            time_sorted_df.loc[current_time.iloc[col].name, 'particle_id'] = prev_id
+
+    return time_sorted_df
+
+
+if __name__ == '__main__':
+    centers = np.array([[0, 0],
+                        [1, 1],
+                        [2, 2],
+                        [3, 3],
+                        [-1, -1],
+                        [-2, -2]]) * 6
+    paths = diffusing_paths(centers=centers, size=50, step_size=1)
+    labeled = assign_labels(paths)
+    percent_diff = sum(labeled['id'] == labeled['particle_id']) / len(labeled)
+    print("Percent Correct: ", percent_diff * 100)
