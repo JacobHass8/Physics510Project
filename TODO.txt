@@ -1,0 +1,32 @@
+1) Simulate Particles Moving
+	Note: This can be done by just generating xy values (we don't have to do the whole generating images every time)
+	- Want to end with a .csv of xy values, time and particle ID	
+	a) Diffusing particles
+	b) Shearing particles 
+	c) Particles merging 
+		- Think two particles merging to 1
+	d) Particles coming into existence
+		- Think one particle comes into focus at some later time
+
+1*) Finding Center of Particles
+	- Right now I implemented this by finding local maxima and then only taking the largest couple maxima
+	- Then I took a 3x3 region about each maxima and used MLE
+	- It works somewhat well, but when particles get too close it  gets really bad 
+	- There may be a better way to do this based on the stuff we did in Homework 8
+
+2) Link Particle Tracks
+	Should do this with multiple different algorithms
+	a) Mean Squared Displacement (I've already implemented this)
+		- This should break for the merging particles and particles coming into existence example
+	b) TrackPy Algorithm
+		- This should work well on most of the cases (except maybe the shearing case) 
+	c) "Robust single-particle tracking in live-cell time-lapse sequences" Algorithm
+		- I think there's a MatLab script for this
+		- Issue is going to be getting the right data into the algorithm
+		- I think they also need particle intensity  
+	d) "Tracking Particles with Large Displacements using Energy Minimization"
+		- Again, I think there's a MatLab script for this
+		- Same issue with finding out what data we need to input 
+
+3) Analyze How Well Algorithms Worked 
+	- May be as easy as saying percent correct for each algorithm in each senario
