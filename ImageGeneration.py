@@ -12,8 +12,9 @@ from matplotlib import pyplot as plt
 from skimage import morphology as morph
 from scipy.optimize import minimize
 from scipy.optimize import linear_sum_assignment
-from numba import jit
+#from numba import jit
 import pandas as pd
+from scipy.io import loadmat
 
 def distance_matrix(size_x, size_y, xc=0, yc=0):
     '''
@@ -504,7 +505,7 @@ def find_multiple_centers(img, size=3):
         y_centers.append(y0_offset + x)
     return x_centers, y_centers
 
-@jit()
+#@jit()
 def make_cost_matrix(initial_centers, final_centers):
     '''
     Make a cost matrix.
@@ -529,9 +530,10 @@ def make_cost_matrix(initial_centers, final_centers):
 
     Examples
     --------
-    >>> centers = [[(5, 5), (-5, -5)], [(4.5, 4.5), (-5.5, -5.5)]]
-    >>> cost_matrix = make_cost_matrix(centers)
-    >>> indeces = linear_sum_assignment(cost_matrix)
+    >>> initial_centers = np.array([(0, 0), (1,1), (1, -1)])
+    >>> final_centers =  np.array([(0.9, 0.8), (0.9, -1.1), (0.1, 0.1)])
+    >>> cost_matrix = make_cost_matrix(initial_centers, final_centers)
+    >>> print(cost_matrix)
     '''
 
     nParticles = len(initial_centers)
@@ -561,6 +563,19 @@ def assign_labels(paths):
     -------
     paths : pandas Dataframe
         Same dataframe with new "particle_id" column
+
+    Examples
+    --------
+    >>> centers = np.array([[0, 0],
+                            [1, 1],
+                            [2, 2],
+                            [-1, -1],
+                            [-2, -2],
+                            [1, -1],
+                            [-1, 1]]) * 6
+    >>> paths = diffusing_paths(centers=centers, size=100, step_size=0.5)
+    >>> df = assign_labels(paths)
+    >>> print("Percent Correct: ", sum(df['particle_id'] == df['id']) / len(df) * 100)
     '''
 
     time_sorted_df = paths.sort_values(by=['time', 'id'])
@@ -585,16 +600,3 @@ def assign_labels(paths):
             time_sorted_df.loc[current_time.iloc[col].name, 'particle_id'] = prev_id
 
     return time_sorted_df
-
-
-if __name__ == '__main__':
-    centers = np.array([[0, 0],
-                        [1, 1],
-                        [2, 2],
-                        [3, 3],
-                        [-1, -1],
-                        [-2, -2]]) * 6
-    paths = diffusing_paths(centers=centers, size=50, step_size=1)
-    labeled = assign_labels(paths)
-    percent_diff = sum(labeled['id'] == labeled['particle_id']) / len(labeled)
-    print("Percent Correct: ", percent_diff * 100)
